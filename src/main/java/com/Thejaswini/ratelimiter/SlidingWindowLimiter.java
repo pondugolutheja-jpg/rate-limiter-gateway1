@@ -1,43 +1,27 @@
 package com.Thejaswini.ratelimiter;
 
-import jakarta.servlet.FilterChain;
-import jakarta.servlet.ServletException;
-import jakarta.servlet.http.HttpServletRequest;
-import jakarta.servlet.http.HttpServletResponse;
-import org.springframework.beans.factory.annotation.Value;
-import org.springframework.stereotype.Component;
-import org.springframework.web.filter.OncePerRequestFilter;
+import java.util.ArrayDeque;
+import java.util.Deque;
 
-import java.io.IOException;
-import java.util.concurrent.ConcurrentHashMap;
+public class SlidingWindowLimiter {
+    private final int maxRequests;
+    private final long windowMillis;
+    private final Deque<Long> timestamps = new ArrayDeque<>();
 
-@Component
-public class RateLimitFilter extends OncePerRequestFilter {
+    public SlidingWindowLimiter(int maxRequests, long windowMillis) {
+        this.maxRequests = maxRequests;
+        this.windowMillis = windowMillis;
+    }
 
-    @Value("${ratelimit.algorithm:token-bucket}")
-    private String algorithm;
-
-    private final ConcurrentHashMap<String, TokenBucket> tokenBuckets = new ConcurrentHashMap<>();
-    private final ConcurrentHashMap<String, SlidingWindowLimiter> windows = new ConcurrentHashMap<>();
-
-    @Override
-    protected void doFilterInternal(HttpServletRequest request,
-                                    HttpServletResponse response,
-                                    FilterChain chain) throws ServletException, IOException {
-        String ip = request.getRemoteAddr();
-        boolean allowed;
-
-        if (algorithm.equals("sliding-window")) {
-            allowed = windows.computeIfAbsent(ip, k -> new SlidingWindowLimiter(10, 60_000)).tryConsume();
-        } else {
-            allowed = tokenBuckets.computeIfAbsent(ip, k -> new TokenBucket(10, 10.0 / 60)).tryConsume();
+    public synchronized boolean tryConsume() {
+        long now = System.currentTimeMillis();
+        while (!timestamps.isEmpty() && now - timestamps.peekFirst() >= windowMillis) {
+            timestamps.pollFirst();
         }
-
-        if (allowed) {
-            chain.doFilter(request, response);
-        } else {
-            response.setStatus(429);
-            response.getWriter().write("Too many requests");
+        if (timestamps.size() < maxRequests) {
+            timestamps.addLast(now);
+            return true;
         }
+        return false;
     }
 }
